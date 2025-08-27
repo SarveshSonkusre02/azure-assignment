@@ -1,48 +1,42 @@
 import logging
 import azure.functions as func
-import csv
+import pandas as pd
 import io
+
+# Expected schema
+EXPECTED_COLUMNS = ["TransactionID", "ProductName", "Quantity", "Amount", "SaleDate"]
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
     logging.info("validateSalesData function triggered.")
 
     try:
-        # Get the uploaded file from request body
+        # Read file from HTTP request body
         file_bytes = req.get_body()
-        file_text = file_bytes.decode("utf-8")
-        reader = csv.DictReader(io.StringIO(file_text))
+        if not file_bytes:
+            return func.HttpResponse(
+                "No file provided in request body.", status_code=400
+            )
 
-        required_fields = ["TransactionID", "ProductName", "Amount"]
+        # Load into pandas
+        df = pd.read_csv(io.BytesIO(file_bytes))
 
-        for row_num, row in enumerate(reader, start=1):
-            # Check for missing required fields
-            for field in required_fields:
-                if not row.get(field):
-                    return func.HttpResponse(
-                        f"Invalid Data: Missing {field} in row {row_num}",
-                        status_code=400
-                    )
+        # Check schema
+        if list(df.columns) != EXPECTED_COLUMNS:
+            return func.HttpResponse(
+                f"Invalid schema. Expected {EXPECTED_COLUMNS}, got {list(df.columns)}",
+                status_code=400,
+            )
 
-            # Validate Amount (non-negative)
-            try:
-                amount = float(row["Amount"])
-                if amount < 0:
-                    return func.HttpResponse(
-                        f"Invalid Data: Negative amount in row {row_num}",
-                        status_code=400
-                    )
-            except ValueError:
-                return func.HttpResponse(
-                    f"Invalid Data: Amount not numeric in row {row_num}",
-                    status_code=400
-                )
+        # Basic row validations
+        if df["Quantity"].lt(1).any():
+            return func.HttpResponse("Invalid data: Quantity must be >= 1", status_code=400)
 
-        # If all validations pass
-        return func.HttpResponse("Validation Passed", status_code=200)
+        if df["Amount"].le(0).any():
+            return func.HttpResponse("Invalid data: Amount must be > 0", status_code=400)
+
+        # If everything is fine
+        return func.HttpResponse("VALID", status_code=200)
 
     except Exception as e:
-        logging.error(f"Unexpected error: {str(e)}")
-        return func.HttpResponse(
-            f"Internal Server Error: {str(e)}",
-            status_code=500
-        )
+        logging.exception("Validation failed.")
+        return func.HttpResponse(f"Error: {str(e)}", status_code=500)
